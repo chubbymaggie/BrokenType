@@ -3,13 +3,13 @@
 // Author: Mateusz Jurczyk (mjurczyk@google.com)
 //
 // Copyright 2018 Google LLC
-// 
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
-// 
+//
 // https://www.apache.org/licenses/LICENSE-2.0
-// 
+//
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
@@ -27,37 +27,31 @@
 
 #pragma comment(lib, "Usp10.lib")
 
+#ifndef ARRAY_SIZE
+#define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
+#endif
+
 //
 // Undocumented definitions required to use the gdi32!GetFontResourceInfoW function.
 //
 typedef BOOL(WINAPI *PGFRI)(LPCWSTR, LPDWORD, LPVOID, DWORD);
 #define QFR_LOGFONT (2)
 
-static VOID DbgPrint(PWCHAR format, ...) {
-  static WCHAR buffer[4096];
-  va_list va;
-
-  va_start(va, format);
-  _vsnwprintf_s(buffer, sizeof(buffer), format, va);
-  wprintf(L"%s\n", buffer);
-  va_end(va);
-}
-
 static BOOL GetLogfonts(LPCWSTR szFontPath, LPLOGFONTW *lpLogfonts, LPDWORD lpdwFonts) {
   // Unload all instances of fonts with this path, in case there are any leftovers in the system.
-  while (RemoveFontResourceW(szFontPath)) { }
+  while (RemoveFontResourceW(szFontPath)) {}
 
   // Load the font file into the system temporarily.
   DWORD dwFontsLoaded = AddFontResourceW(szFontPath);
   if (dwFontsLoaded == 0) {
-    DbgPrint(L"[-] AddFontResourceW() failed.");
+    wprintf(L"[-] AddFontResourceW() failed.\n");
     return FALSE;
   }
 
   *lpdwFonts = dwFontsLoaded;
   *lpLogfonts = (LPLOGFONTW)HeapAlloc(GetProcessHeap(), 0, dwFontsLoaded * sizeof(LOGFONTW));
   if (*lpLogfonts == NULL) {
-    DbgPrint(L"[-] HeapAlloc(%u) failed.", dwFontsLoaded * sizeof(LOGFONTW));
+    wprintf(L"[-] HeapAlloc(%u) failed.\n", dwFontsLoaded * sizeof(LOGFONTW));
     RemoveFontResourceW(szFontPath);
     return FALSE;
   }
@@ -68,7 +62,7 @@ static BOOL GetLogfonts(LPCWSTR szFontPath, LPLOGFONTW *lpLogfonts, LPDWORD lpdw
 
   DWORD cbBuffer = dwFontsLoaded * sizeof(LOGFONTW);
   if (!GetFontResourceInfo(szFontPath, &cbBuffer, *lpLogfonts, QFR_LOGFONT)) {
-    DbgPrint(L"[-] GetFontResourceInfoW() failed.");
+    wprintf(L"[-] GetFontResourceInfoW() failed.\n");
     HeapFree(GetProcessHeap(), 0, *lpLogfonts);
     RemoveFontResourceW(szFontPath);
     return FALSE;
@@ -197,7 +191,7 @@ int wmain(int argc, wchar_t *argv[], wchar_t *envp[]) {
     DWORD dwFonts = 0;
 
     if (GetLogfonts(szFontPath, &lpLogfonts, &dwFonts)) {
-      DbgPrint(L"[+] Extracted %u logfonts.", dwFonts);
+      wprintf(L"[+] Extracted %u logfonts.\n", dwFonts);
     } else {
       break;
     }
@@ -205,22 +199,25 @@ int wmain(int argc, wchar_t *argv[], wchar_t *envp[]) {
     // Load the font in the system from memory.
     int cFonts = AddFontResourceW(szFontPath);
     if (cFonts > 0) {
-      DbgPrint(L"[+] Installed %d fonts.", cFonts);
+      wprintf(L"[+] Installed %d fonts.\n", cFonts);
     } else {
-      DbgPrint(L"[-] AddFontResourceW() failed.");
+      wprintf(L"[-] AddFontResourceW() failed.\n");
       break;
     }
 
     HDC hDC = GetDC(NULL);
     SetGraphicsMode(hDC, GM_ADVANCED);
+    SetMapMode(hDC, MM_TEXT);
 
     // Display all fonts from the input file.
     BOOL success = TRUE;
     for (DWORD font_it = 0; success && font_it < dwFonts; font_it++) {
-      // Display the font in several various (but deterministic, due to constant PRNG seed) configurations.
-      for (unsigned int variation_it = 0; success && variation_it < FONT_VARIATION_COUNT; variation_it++) {
-        DbgPrint(L"[+] Starting to test font %u / %d, variation %u / %d",
-                 font_it + 1, dwFonts, variation_it + 1, FONT_VARIATION_COUNT);
+      // Display the font in several different point sizes.
+      CONST LONG point_sizes[] = { 8, 9, 10, 11, 12, 14, 16, 18, 20, 22, 24, 26, 28, 36, 48, 72 };
+
+      for (unsigned int variation_it = 0; success && variation_it < ARRAY_SIZE(point_sizes) + 1; variation_it++) {
+        wprintf(L"[+] Starting to test font %u / %d, variation %u / %d\n",
+                font_it + 1, dwFonts, variation_it + 1, ARRAY_SIZE(point_sizes) + 1);
 
         HFONT hFont = NULL;
         if (variation_it == 0) {
@@ -229,8 +226,8 @@ int wmain(int argc, wchar_t *argv[], wchar_t *envp[]) {
           LOGFONTW lf;
           RtlCopyMemory(&lf, &lpLogfonts[font_it], sizeof(LOGFONTW));
 
-          lf.lfHeight = (rand() % 80) - 40;
-          lf.lfWeight = (rand() % 10) * 100;
+          lf.lfHeight = -MulDiv(point_sizes[variation_it - 1], GetDeviceCaps(hDC, LOGPIXELSY), 72);
+          lf.lfWeight = 0;
           lf.lfItalic = (rand() & 1);
           lf.lfUnderline = (rand() & 1);
           lf.lfStrikeOut = (rand() & 1);
@@ -240,7 +237,7 @@ int wmain(int argc, wchar_t *argv[], wchar_t *envp[]) {
         }
 
         if (hFont == NULL) {
-          DbgPrint(L"[!]   CreateFontIndirectW() failed.");
+          wprintf(L"[!]   CreateFontIndirectW() failed.\n");
           success = FALSE;
           DeleteFont(hFont);
           break;
@@ -250,7 +247,7 @@ int wmain(int argc, wchar_t *argv[], wchar_t *envp[]) {
         SelectFont(hDC, hFont);
 
 #if HARNESS_TEST_KERNING_PAIRS
-        DbgPrint(L"[+]   Getting kerning pairs");
+        wprintf(L"[+]   Getting kerning pairs.\n");
 
         // Get the font's kerning pairs.
         DWORD nNumPairs = GetKerningPairs(hDC, 0, NULL);
@@ -258,19 +255,19 @@ int wmain(int argc, wchar_t *argv[], wchar_t *envp[]) {
           LPKERNINGPAIR lpkrnpairs = (LPKERNINGPAIR)HeapAlloc(GetProcessHeap(), 0, nNumPairs * sizeof(KERNINGPAIR));
 
           if (GetKerningPairs(hDC, nNumPairs, lpkrnpairs) == 0) {
-            DbgPrint(L"[!]   GetKerningPairs() failed.");
+            wprintf(L"[!]   GetKerningPairs() failed.\n");
           }
 
           HeapFree(GetProcessHeap(), 0, lpkrnpairs);
         }
 #endif  // HARNESS_TEST_KERNING_PAIRS
 
-        DbgPrint(L"[+]   Getting unicode ranges");
+        wprintf(L"[+]   Getting unicode ranges.\n");
 
         // Get Unicode ranges available in the font.
         DWORD dwGlyphsetSize = GetFontUnicodeRanges(hDC, NULL);
         if (dwGlyphsetSize == 0) {
-          DbgPrint(L"[!]   GetFontUnicodeRanges() failed.");
+          wprintf(L"[!]   GetFontUnicodeRanges() failed.\n");
           success = FALSE;
           DeleteFont(hFont);
           break;
@@ -279,7 +276,7 @@ int wmain(int argc, wchar_t *argv[], wchar_t *envp[]) {
         LPGLYPHSET lpGlyphset = (LPGLYPHSET)HeapAlloc(GetProcessHeap(), 0, dwGlyphsetSize);
 
         if (GetFontUnicodeRanges(hDC, lpGlyphset) == 0) {
-          DbgPrint(L"[!]   GetFontUnicodeRanges() failed.");
+          wprintf(L"[!]   GetFontUnicodeRanges() failed.\n");
           success = FALSE;
           HeapFree(GetProcessHeap(), 0, lpGlyphset);
           DeleteFont(hFont);
@@ -291,7 +288,7 @@ int wmain(int argc, wchar_t *argv[], wchar_t *envp[]) {
         DWORD dwTextCount = 0;
 #endif  // HARNESS_TEST_DRAWTEXT
 
-        DbgPrint(L"[+]   Getting glyph outlines and drawing them on screen");
+        wprintf(L"[+]   Getting glyph outlines and drawing them on screen.\n");
 
         for (DWORD i = 0; i < lpGlyphset->cRanges; i++) {
           for (LONG j = lpGlyphset->ranges[i].wcLow; j < lpGlyphset->ranges[i].wcLow + lpGlyphset->ranges[i].cGlyphs; j++) {
@@ -308,7 +305,7 @@ int wmain(int argc, wchar_t *argv[], wchar_t *envp[]) {
                 LPVOID lpvBuffer = HeapAlloc(GetProcessHeap(), 0, cbBuffer);
 
                 if (GetGlyphOutline(hDC, j, format, &gm, cbBuffer, lpvBuffer, &mat2) == GDI_ERROR) {
-                  DbgPrint(L"[!]   GetGlyphOutline() failed for glyph %u.", j);
+                  wprintf(L"[!]   GetGlyphOutline() failed for glyph %u.\n", j);
                 }
 
                 HeapFree(GetProcessHeap(), 0, lpvBuffer);
@@ -336,7 +333,7 @@ int wmain(int argc, wchar_t *argv[], wchar_t *envp[]) {
 #endif  // HARNESS_TEST_DRAWTEXT
 
 #if HARNESS_TEST_UNISCRIBE
-        DbgPrint(L"[+]   Testing the Uniscribe user-mode library");
+        wprintf(L"[+]   Testing the Uniscribe user-mode library.\n");
 
         // Test some user-mode Windows Uniscribe functionality.
         TestUniscribe(hDC, lpGlyphset);
@@ -354,3 +351,4 @@ int wmain(int argc, wchar_t *argv[], wchar_t *envp[]) {
 
   return 0;
 }
+
